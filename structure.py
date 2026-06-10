@@ -34,7 +34,7 @@ class Operation:
         self.duration = int(math.ceil(duration_hrs * 60))
 
         self.skill = skill
-        self.n_workes = int(n_workers)
+        self.n_workers = int(n_workers)
 
         # Converting predecessors string into a list of integers
         self.predecessors_str = self._parse_predecessors(predecessors_str)
@@ -93,7 +93,7 @@ class SSGS:
         Initialize schedule generator with operations list and resource constraints.
         """
         self.operations = operations
-        self.technicians_limits = technicians_dict.copy()
+        self.tech_limits = technicians_dict.copy()
         self.machine_limits = machine_capacity_dict.copy()
 
         # Storing allocation times to evaluate PLV
@@ -120,7 +120,7 @@ class SSGS:
         """
         Returns all operations being executed at current time.
         """
-        return [op for op in self.operations if op._start_time is not None and op.start_time <= current_time < op.end_time]
+        return [op for op in self.operations if op.start_time is not None and op.start_time <= current_time < op.end_time]
     
     def _check_resources_availability(self, op, current_time):
         """
@@ -132,7 +132,7 @@ class SSGS:
         tech_in_use = {skill: 0 for skill in self.tech_limits.keys()}
         for a_op in active_ops:
             if a_op.skill in tech_in_use:
-                tech_in_use[a_op.skill] += a_op.num_workers
+                tech_in_use[a_op.skill] += a_op.n_workers
 
         # Check available technicians for a new operation
         if tech_in_use.get(op.skill, 0) + op.n_workers > self.tech_limits.get(op.skill, 0):
@@ -180,7 +180,7 @@ class SSGS:
                     op.end_time = current_time + op.duration
 
                     # Register ocupation
-                    self.tech_usage[op.skill] += (op.num_workers * op.duration)
+                    self.tech_usage[op.skill] += (op.n_workers * op.duration)
 
                     pending_ops.remove(op)
                     ops_started_this_tick = True
@@ -256,7 +256,7 @@ class GRASPConstructor:
                 if get_id(op) not in scheduled_ops:
                     predecessors_met = all(
                         (op.task_id, pred_id) in scheduled_ops
-                        for pred_id in op.predecessors
+                        for pred_id in op.predecessors_str
                     )
                 if predecessors_met:
                     eligible_ops.append(op)
@@ -291,7 +291,7 @@ class GRASPLocalSearch:
         """
         Verify whether is secure to change the operations order considering precedence order.
         """
-        if op1.task_id == op2.task_id and op1.op_id in op2.predecessors:
+        if op1.task_id == op2.task_id and op1.op_id in op2.predecessors_str:
             return False
         return True
     
@@ -337,11 +337,11 @@ if __name__ == '__main__':
     print(">>> INITIALIZING MAINTENANCE SCHEDULE OPTIMIZER WITH HI-ITLBO-GRASP-SSGS <<<")
 
     try:
-        rru = load_operations('datasets/Case 1.xlsx', 'RRU')
-        hql = load_operations('datasets/Case 1.xlsx', 'HQL')
-        itp = load_operations('datasets/Case 1.xlsx', 'ITP')
-        iss = load_operations('datasets/Case 1.xlsx', 'ISS')
-        tlu = load_operations('datasets/Case 1.xlsx', 'TLU')
+        rru = load_operations('data/Case 1.xlsx', 'RRU')
+        hql = load_operations('data/Case 1.xlsx', 'HQL')
+        itp = load_operations('data/Case 1.xlsx', 'ITP')
+        iss = load_operations('data/Case 1.xlsx', 'ISS')
+        tlu = load_operations('data/Case 1.xlsx', 'TLU')
         operations = rru + hql + itp + iss + tlu
 
         print(f"[{len(operations)}] operations loaded successfull!")
@@ -389,4 +389,4 @@ if __name__ == '__main__':
     # print chronological order of tasks
     print("Ordem Lógica das Tarefas no Cronograma Ótimo:")
     for op in global_best_schedule:
-        print(f"-> Máquina: {op.machine} | Task: {op.task_id} | Op: {op.op_id} | Especialidade: {op.skill} ({op.num_workers} pax)")
+        print(f"-> Máquina: {op.machine} | Task: {op.task_id} | Op: {op.op_id} | Especialidade: {op.skill} ({op.n_workers} pax)")
