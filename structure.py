@@ -92,7 +92,7 @@ class SSGS:
         Initialize schedule generator with operations list and resource constraints.
         """
         self.operations = operations
-        self.technicians_limits = technicians_dict.copy()
+        self.tech_limits = technicians_dict.copy()
         self.machine_limits = machine_capacity_dict.copy()
 
         # Storing allocation times to evaluate PLV
@@ -336,11 +336,11 @@ if __name__ == '__main__':
     print(">>> INITIALIZING MAINTENANCE SCHEDULE OPTIMIZER WITH HI-ITLBO-GRASP-SSGS <<<")
 
     try:
-        rru = load_operations('datasets/Case 1.xlsx', 'RRU')
-        hql = load_operations('datasets/Case 1.xlsx', 'HQL')
-        itp = load_operations('datasets/Case 1.xlsx', 'ITP')
-        iss = load_operations('datasets/Case 1.xlsx', 'ISS')
-        tlu = load_operations('datasets/Case 1.xlsx', 'TLU')
+        rru = load_operations('data/Case 1.xlsx', 'RRU')
+        hql = load_operations('data/Case 1.xlsx', 'HQL')
+        itp = load_operations('data/Case 1.xlsx', 'ITP')
+        iss = load_operations('data/Case 1.xlsx', 'ISS')
+        tlu = load_operations('data/Case 1.xlsx', 'TLU')
         operations = rru + hql + itp + iss + tlu
 
         print(f"[{len(operations)}] operations loaded successfull!")
