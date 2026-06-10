@@ -34,7 +34,7 @@ class Operation:
         self.duration = int(math.ceil(duration_hrs * 60))
 
         self.skill = skill
-        self.n_workes = int(n_workers)
+        self.num_workers = int(n_workers)
 
         # Converting predecessors string into a list of integers
         self.predecessors_str = self._parse_predecessors(predecessors_str)
@@ -135,12 +135,12 @@ class SSGS:
                 tech_in_use[a_op.skill] += a_op.num_workers
 
         # Check available technicians for a new operation
-        if tech_in_use.get(op.skill, 0) + op.n_workers > self.tech_limits.get(op.skill, 0):
+        if tech_in_use.get(op.skill, 0) + op.num_workers > self.tech_limits.get(op.skill, 0):
             return False
         
         # Count machine free spaces
-        machine_in_use = sum(a_op.n_workers for a_op in active_ops if a_op.machine == op.machine)
-        if machine_in_use + op.n_workers > self.machine_limits.get(op.machine, 999):
+        machine_in_use = sum(a_op.num_workers for a_op in active_ops if a_op.machine == op.machine)
+        if machine_in_use + op.num_workers > self.machine_limits.get(op.machine, 999):
             return False
         
         return True
