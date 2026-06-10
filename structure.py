@@ -58,31 +58,6 @@ class Operation:
 # MODULE 2: LOADING AND PREPARING DATA
 # =====================================
 
-def load_operations(file_path, sheet):
-    """
-    Loads operations data from an Excel file and returns a list of Operation instances.
-    """
-    df = pd.read_excel(file_path, sheet_name=sheet)
-
-    operations = []
-    for _, row in df.iterrows():
-        if pd.isna(row['Task ID']) or pd.isna(row['Operation ID']):
-            continue
-
-        machine = sheet
-        op = Operation(
-            machine=machine,
-            task_id=row['Task ID'],
-            op_id=row['Operation ID'],
-            duration_hrs=row['Task Duration'],
-            skill=row['Skills Required'],
-            n_workers=row['Num. Of Workers'],
-            predecessors_str=row.get('Preceding Op', '') # Usa get para evitar erro se a coluna estiver vazia
-        )
-        operations.append(op)
-
-    return operations
-
 def load_all_operations(file_path, sheets=None):
     """
     Loads operations data from an Excel file for multiple sheets at once and returns a list of Operation instances.
