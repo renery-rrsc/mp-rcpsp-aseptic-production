@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import math
-import random
+import secrets
 
 # ====================================
 # MODULE 1: DEFINING MODEL PARAMETERS
@@ -273,7 +273,7 @@ class GRASPConstructor:
             rcl = [op for op in eligible_ops if op.duration >= threshold]
 
             # RANDOMIZED SELECTION FROM RCL
-            chosen_op = random.choice(rcl)
+            chosen_op = secrets.choice(rcl)
             priority_list.append(chosen_op)
             scheduled_ops.add(get_id(chosen_op))
 
