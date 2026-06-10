@@ -1,6 +1,7 @@
 import pandas as pd
+import numpy as np
 import math
-import secrets
+import random
 
 # ====================================
 # MODULE 1: DEFINING MODEL PARAMETERS
@@ -33,7 +34,7 @@ class Operation:
         self.duration = int(math.ceil(duration_hrs * 60))
 
         self.skill = skill
-        self.n_workers = int(n_workers)
+        self.n_workes = int(n_workers)
 
         # Converting predecessors string into a list of integers
         self.predecessors_str = self._parse_predecessors(predecessors_str)
@@ -47,38 +48,44 @@ class Operation:
         if pd.isna(pred_str) or pred_str.strip() == '':
             return []
         pred_str = str(pred_str).replace(',', ';')
-        
+
         return [int(x.strip()) for x in pred_str.split(';') if x.strip().isdigit()]
-        
+
     def __repr__(self):
         return f"Operation(machine={self.machine}, task_id={self.task_id} - op_id={self.op_id} | duration={self.duration}, predecessors={self.predecessors_str})"
-    
+
 # =====================================
 # MODULE 2: LOADING AND PREPARING DATA
 # =====================================
 
-def load_operations(file_path, sheet):
+def load_all_operations(file_path, sheets=None):
     """
-    Loads operations data from an Excel file and returns a list of Operation instances.
+    Loads operations data from an Excel file for multiple sheets at once and returns a list of Operation instances.
     """
-    df = pd.read_excel(file_path, sheet_name=sheet)
+    all_sheets_df = pd.read_excel(file_path, sheet_name=None)
+    if sheets is None:
+        sheets = list(all_sheets_df.keys())
 
     operations = []
-    for _, row in df.iterrows():
-        if pd.isna(row['Task ID']) or pd.isna(row['Operation ID']):
+    for sheet in sheets:
+        if sheet not in all_sheets_df:
             continue
-        
-        machine = sheet
-        op = Operation(
-            machine=machine,
-            task_id=row['Task ID'],
-            op_id=row['Operation ID'],
-            duration_hrs=row['Task Duration'],
-            skill=row['Skills Required'],
-            n_workers=row['Num. Of Workers'],
-            predecessors_str=row.get('Preceding Op', '') # Usa get para evitar erro se a coluna estiver vazia
-        )
-        operations.append(op)
+        df = all_sheets_df[sheet]
+        for _, row in df.iterrows():
+            if pd.isna(row['Task ID']) or pd.isna(row['Operation ID']):
+                continue
+
+            machine = sheet
+            op = Operation(
+                machine=machine,
+                task_id=row['Task ID'],
+                op_id=row['Operation ID'],
+                duration_hrs=row['Task Duration'],
+                skill=row['Skills Required'],
+                n_workers=row['Num. Of Workers'],
+                predecessors_str=row.get('Preceding Op', '') # Usa get para evitar erro se a coluna estiver vazia
+            )
+            operations.append(op)
 
     return operations
 
@@ -92,11 +99,11 @@ class SSGS:
         Initialize schedule generator with operations list and resource constraints.
         """
         self.operations = operations
-        self.tech_limits = technicians_dict.copy()
+        self.technicians_limits = technicians_dict.copy()
         self.machine_limits = machine_capacity_dict.copy()
 
         # Storing allocation times to evaluate PLV
-        self.tech_usage = {skill: 0 for skill in self.technicians_limits.keys()}
+        self.tech_usage = {skill: 0 for skill in self.tech_limits.keys()}
 
         # Auxiliar dictionary to search operation by the tuple (task_id, op_id)
         self.op_dict = {(op.task_id, op.op_id): op for op in operations}
@@ -114,13 +121,13 @@ class SSGS:
             if pred_op.end_time is None or pred_op.end_time > current_time:
                 return False
         return True
-    
+
     def _get_active_operations(self, current_time):
         """
         Returns all operations being executed at current time.
         """
-        return [op for op in self.operations if op.start_time is not None and op.start_time <= current_time < op.end_time]
-    
+        return [op for op in self.operations if op._start_time is not None and op.start_time <= current_time < op.end_time]
+
     def _check_resources_availability(self, op, current_time):
         """
         Verify whether there are available technicians and free space on the machine at current time.
@@ -128,25 +135,25 @@ class SSGS:
         active_ops = self._get_active_operations(current_time)
 
         # Count ocuppied technicians
-        tech_in_use = {skill: 0 for skill in self.technicians_limits.keys()}
+        tech_in_use = {skill: 0 for skill in self.tech_limits.keys()}
         for a_op in active_ops:
             if a_op.skill in tech_in_use:
-                tech_in_use[a_op.skill] += a_op.n_workers
+                tech_in_use[a_op.skill] += a_op.num_workers
 
         # Check available technicians for a new operation
-        if tech_in_use.get(op.skill, 0) + op.n_workers > self.technicians_limits.get(op.skill, 0):
+        if tech_in_use.get(op.skill, 0) + op.n_workers > self.tech_limits.get(op.skill, 0):
             return False
-        
+
         # Count machine free spaces
         machine_in_use = sum(a_op.n_workers for a_op in active_ops if a_op.machine == op.machine)
         if machine_in_use + op.n_workers > self.machine_limits.get(op.machine, 999):
             return False
-        
+
         return True
-    
+
     def build_schedule(self, priority_list):
         """
-        Generate the schedule based on priorities 
+        Generate the schedule based on priorities
         priority_list: 'Operation' object list ordered by GRASP or ITLBO
         """
 
@@ -154,8 +161,8 @@ class SSGS:
         for op in self.operations:
             op.start_time = None
             op.end_time = None
-        
-        self.tech_usage = {skill: 0 for skill in self.technicians_limits.keys()}
+
+        self.tech_usage = {skill: 0 for skill in self.tech_limits.keys()}
 
         # Pending operations ordered by priority
         pending_ops = list(priority_list)
@@ -171,7 +178,7 @@ class SSGS:
                 # Check precedence
                 if not self._check_predecessors_finished(op, current_time):
                     continue
-                
+
                 # Check space and resource availability
                 if self._check_resources_availability(op, current_time):
                     # Start operation
@@ -179,7 +186,7 @@ class SSGS:
                     op.end_time = current_time + op.duration
 
                     # Register ocupation
-                    self.tech_usage[op.skill] += (op.n_workers * op.duration)
+                    self.tech_usage[op.skill] += (op.num_workers * op.duration)
 
                     pending_ops.remove(op)
                     ops_started_this_tick = True
@@ -196,7 +203,7 @@ class SSGS:
                     break
 
         return self._calculate_objectives()
-    
+
     def _calculate_objectives(self):
         """
         Evaluates Makespan and PLV of the generated schedule.
@@ -205,13 +212,13 @@ class SSGS:
         makespan = max(op.end_time for op in self.operations if op.end_time is not None)
 
         # PLV
-        total_workers = sum(self.technicians_limits.values())
+        total_workers = sum(self.tech_limits.values())
         if total_workers > 0:
             avg_workload = sum(self.tech_usage.values()) / total_workers
 
             variance_sum = 0
             for skill, total_time in self.tech_usage.items():
-                num_techs = self.technicians_limits.get(skill, 1)
+                num_techs = self.tech_limits.get(skill, 1)
                 time_per_tech = total_time / num_techs if num_techs > 0 else 0
                 variance_sum += num_techs * ((time_per_tech - avg_workload) **2)
 
@@ -220,7 +227,7 @@ class SSGS:
             plv = 0
 
         return makespan, plv
-    
+
 # =====================================================================
 # MODULE 4: IMPLEMENTING GREEDY-RANDOMIZED ADAPTATIVE SEARCH PROCEDURE
 # =====================================================================
@@ -243,7 +250,7 @@ class GRASPConstructor:
 
         def get_id(op):
             return (op.task_id, op.op_id)
-        
+
         total_ops = len(self.operations)
 
         while len(priority_list) < total_ops:
@@ -255,11 +262,11 @@ class GRASPConstructor:
                 if get_id(op) not in scheduled_ops:
                     predecessors_met = all(
                         (op.task_id, pred_id) in scheduled_ops
-                        for pred_id in op.predecessors_str
+                        for pred_id in op.predecessors
                     )
                 if predecessors_met:
                     eligible_ops.append(op)
-            
+
             if not eligible_ops:
                 print("ERROR: deadlock on predecessors net. Please review the data.")
 
@@ -272,7 +279,7 @@ class GRASPConstructor:
             rcl = [op for op in eligible_ops if op.duration >= threshold]
 
             # RANDOMIZED SELECTION FROM RCL
-            chosen_op = secrets.choice(rcl)
+            chosen_op = random.choice(rcl)
             priority_list.append(chosen_op)
             scheduled_ops.add(get_id(chosen_op))
 
@@ -290,10 +297,10 @@ class GRASPLocalSearch:
         """
         Verify whether is secure to change the operations order considering precedence order.
         """
-        if op1.task_id == op2.task_id and op1.op_id in op2.predecessors_str:
+        if op1.task_id == op2.task_id and op1.op_id in op2.predecessors:
             return False
         return True
-    
+
     def optimize(self, initial_priority_list, current_makespan, current_plv):
         """
         Apply local search while iteractively refining the schedule
@@ -325,9 +332,9 @@ class GRASPLocalSearch:
                         best_list = neighbour_list
                         improved = True
                         break
-        
+
         return best_list, best_cmax, best_plv
-    
+
 # ============================
 # MODULE 6: EXECUTION PIPELIN
 # ============================
@@ -336,15 +343,10 @@ if __name__ == '__main__':
     print(">>> INITIALIZING MAINTENANCE SCHEDULE OPTIMIZER WITH HI-ITLBO-GRASP-SSGS <<<")
 
     try:
-        rru = load_operations('data/Case 1.xlsx', 'RRU')
-        hql = load_operations('data/Case 1.xlsx', 'HQL')
-        itp = load_operations('data/Case 1.xlsx', 'ITP')
-        iss = load_operations('data/Case 1.xlsx', 'ISS')
-        tlu = load_operations('data/Case 1.xlsx', 'TLU')
-        operations = rru + hql + itp + iss + tlu
+        operations = load_all_operations('datasets/Case 1.xlsx', ['RRU', 'HQL', 'ITP', 'ISS', 'TLU'])
 
         print(f"[{len(operations)}] operations loaded successfull!")
-    
+
     except Exception as e:
         print(f"Error: {e}")
         exit()
@@ -384,8 +386,8 @@ if __name__ == '__main__':
     print(f"Total downtime (Makespan): {global_best_makespan:.0f} minutes ({global_best_makespan/60:.2f} horas)")
     print(f"Personel Loading Variance (PLV): {global_best_plv:.2f}")
     print("=======================================================\n")
-    
+
     # print chronological order of tasks
     print("Ordem Lógica das Tarefas no Cronograma Ótimo:")
     for op in global_best_schedule:
-        print(f"-> Máquina: {op.machine} | Task: {op.task_id} | Op: {op.op_id} | Especialidade: {op.skill} ({op.n_workers} pax)")
+        print(f"-> Máquina: {op.machine} | Task: {op.task_id} | Op: {op.op_id} | Especialidade: {op.skill} ({op.num_workers} pax)")
