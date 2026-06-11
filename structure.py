@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import math
 import random
+import time
 
 # ====================================
 # MODULE 1: DEFINING MODEL PARAMETERS
@@ -424,7 +425,11 @@ class Hybrid_ITLBO_GRASP:
             self.plvs.append(plv)
 
     def optimize(self):
+        history = []
+
+        start_time_gen0 = time.time()
         self.initialize_population()
+        end_time_gen0 = time.time()
 
         best_fit = min(self.fitness)
         best_idx = self.fitness.index(best_fit)
@@ -433,7 +438,19 @@ class Hybrid_ITLBO_GRASP:
         global_best_mk = self.makespans[best_idx]
         global_best_plv = self.plvs[best_idx]
 
+        history.append({
+            'generation': 0,
+            'time': end_time_gen0 - start_time_gen0,
+            'best_makespan': self.makespans[best_idx],
+            'best_plv': self.plvs[best_idx],
+            'best_fitness': self.fitness[best_idx],
+            'global_best_makespan': global_best_mk,
+            'global_best_plv': global_best_plv,
+            'global_best_fitness': best_fit
+        })
+
         for gen in range(self.max_generations):
+            start_time_gen = time.time()
             # Sort population to rank
             ranked_indices = np.argsort(self.fitness)
             teacher_idx = ranked_indices[0]
@@ -541,6 +558,10 @@ class Hybrid_ITLBO_GRASP:
 
             # Update Global Best
             gen_best_idx = np.argmin(self.fitness)
+            gen_best_mk = self.makespans[gen_best_idx]
+            gen_best_plv = self.plvs[gen_best_idx]
+            gen_best_fit = self.fitness[gen_best_idx]
+
             if self.fitness[gen_best_idx] < best_fit:
                 best_fit = self.fitness[gen_best_idx]
                 global_best_vector = self.population[gen_best_idx].copy()
@@ -548,9 +569,21 @@ class Hybrid_ITLBO_GRASP:
                 global_best_plv = self.plvs[gen_best_idx]
                 print(f"Gen {gen+1:02d} | NEW OPTIMAL >>> Makespan: {global_best_mk:.0f} | PLV: {global_best_plv:.2f}")
 
+            end_time_gen = time.time()
+            history.append({
+                'generation': gen + 1,
+                'time': end_time_gen - start_time_gen,
+                'best_makespan': gen_best_mk,
+                'best_plv': gen_best_plv,
+                'best_fitness': gen_best_fit,
+                'global_best_makespan': global_best_mk,
+                'global_best_plv': global_best_plv,
+                'global_best_fitness': best_fit
+            })
+
         # Final decode for the best schedule
         _, _, best_schedule = self.ssgs.decode(global_best_vector)
-        return global_best_mk, global_best_plv, best_schedule
+        return global_best_mk, global_best_plv, best_schedule, history
 
 if __name__ == '__main__':
     print(">>> INITIALIZING MAINTENANCE SCHEDULE OPTIMIZER WITH HI-ITLBO-GRASP-SSGS <<<")
@@ -570,8 +603,13 @@ if __name__ == '__main__':
     print("\nRunning Hybrid ITLBO-GRASP Optimizer...")
     # Parameters can be adjusted as needed
     # Using smaller population and generations for quick testing, but functionally robust.
-    optimizer = Hybrid_ITLBO_GRASP(operations, pop_size=10, max_generations=5, alpha=0.3)
-    best_makespan, best_plv, best_schedule = optimizer.optimize()
+    optimizer = Hybrid_ITLBO_GRASP(operations, pop_size=10, max_generations=50, alpha=0.3)
+    best_makespan, best_plv, best_schedule, history = optimizer.optimize()
+
+    # Save optimization metrics history
+    history_df = pd.DataFrame(history)
+    history_df.to_csv("optimization_history.csv", index=False)
+    print(f"\nOptimization history saved to 'optimization_history.csv' with {len(history_df)} generations recorded.")
 
     print("\n=======================================================")
     print("                RESULTADO DA OTIMIZAÇÃO                ")
