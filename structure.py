@@ -423,6 +423,16 @@ class Hybrid_ITLBO_GRASP:
         mk, plv, schedule = self.ssgs.decode(vector)
         return mk * self.w1 + plv * self.w2, mk, plv, schedule
 
+    def _eval_and_update(self, i, new_learner, current_learner):
+        fit, mk, plv, _ = self._eval(new_learner)
+        if fit < self.fitness[i]:
+            self.population[i] = new_learner
+            self.fitness[i] = fit
+            self.makespans[i] = mk
+            self.plvs[i] = plv
+            return new_learner
+        return current_learner
+
     def initialize_population(self):
         print(f"Initializing Population (Size: {self.pop_size}) with GRASP Constructor...")
         for _ in range(self.pop_size):
@@ -490,13 +500,7 @@ class Hybrid_ITLBO_GRASP:
                     new_learner_1[op] = learner[op] + r * (teacher[op] - T_F * mean_vector[op])
                     new_learner_1[op] = max(0.0, min(1.0, new_learner_1[op])) # bound
 
-                fit1, mk1, plv1, _ = self._eval(new_learner_1)
-                if fit1 < self.fitness[i]:
-                    self.population[i] = new_learner_1
-                    self.fitness[i] = fit1
-                    self.makespans[i] = mk1
-                    self.plvs[i] = plv1
-                    learner = new_learner_1
+                learner = self._eval_and_update(i, new_learner_1, learner)
 
                 # FASE 2: ASSISTANT TEACHING
                 r1 = random.random()
@@ -506,13 +510,7 @@ class Hybrid_ITLBO_GRASP:
                     new_learner_2[op] = learner[op] + r1 * (teacher[op] - learner[op]) + r2 * (assistant[op] - learner[op])
                     new_learner_2[op] = max(0.0, min(1.0, new_learner_2[op]))
 
-                fit2, mk2, plv2, _ = self._eval(new_learner_2)
-                if fit2 < self.fitness[i]:
-                    self.population[i] = new_learner_2
-                    self.fitness[i] = fit2
-                    self.makespans[i] = mk2
-                    self.plvs[i] = plv2
-                    learner = new_learner_2
+                learner = self._eval_and_update(i, new_learner_2, learner)
 
                 # FASE 3: LEARNING
                 partner_idx = random.choice([x for x in range(self.pop_size) if x != i])
@@ -527,12 +525,7 @@ class Hybrid_ITLBO_GRASP:
                         new_learner_3[op] = learner[op] + r3 * (partner[op] - learner[op])
                     new_learner_3[op] = max(0.0, min(1.0, new_learner_3[op]))
 
-                fit3, mk3, plv3, _ = self._eval(new_learner_3)
-                if fit3 < self.fitness[i]:
-                    self.population[i] = new_learner_3
-                    self.fitness[i] = fit3
-                    self.makespans[i] = mk3
-                    self.plvs[i] = plv3
+                learner = self._eval_and_update(i, new_learner_3, learner)
 
             # FASE 4: INTENSIFICAÇÃO COM BUSCA LOCAL GRASP (Top 5%)
             top_n = max(1, int(0.05 * self.pop_size))
