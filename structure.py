@@ -12,7 +12,8 @@ TECHNICIANS_AVAILABLE = {
     'Mechanical': 8,
     'Electrical': 4,
     'Calibration': 2,
-    'Lubrication': 1
+    'Lubrication': 1,
+    'Automation': 2
 }
 
 # Mc: machine spatial capacity (number of technicians that can work on a machine simultaneously)
@@ -34,7 +35,7 @@ class Operation:
         self.duration = int(math.ceil(duration_hrs * 60))
 
         self.skill = skill
-        self.n_workes = int(n_workers)
+        self.n_workers = int(n_workers)
 
         # Converting predecessors string into a list of integers
         self.predecessors_str = self._parse_predecessors(predecessors_str)
@@ -53,6 +54,25 @@ class Operation:
 
     def __repr__(self):
         return f"Operation(machine={self.machine}, task_id={self.task_id} - op_id={self.op_id} | duration={self.duration}, predecessors={self.predecessors_str})"
+
+class Technician:
+    def __init__(self, tech_id, skills):
+        self.tech_id = tech_id
+        self.skills = skills # Ex: ['Mechanical', 'Electrical']
+        self.worked_hours = 0.0
+        self.available_from = 0.0
+
+def create_technicians_list(technicians_available):
+    """
+    Creates a list of Technician objects based on the availability dictionary.
+    """
+    techs = []
+    tech_id_counter = 1
+    for skill, count in technicians_available.items():
+        for _ in range(count):
+            techs.append(Technician(f"T{tech_id_counter}", [skill]))
+            tech_id_counter += 1
+    return techs
 
 # =====================================
 # MODULE 2: LOADING AND PREPARING DATA
@@ -94,139 +114,145 @@ def load_all_operations(file_path, sheets=None):
 # =========================================================
 
 class SSGS:
-    def __init__(self, operations, technicians_dict, machine_capacity_dict):
-        """
-        Initialize schedule generator with operations list and resource constraints.
-        """
+    def __init__(self, operations, technicians_list, machine_capacity_dict):
         self.operations = operations
-        self.technicians_limits = technicians_dict.copy()
+        self.technicians = technicians_list
         self.machine_limits = machine_capacity_dict.copy()
 
-        # Storing allocation times to evaluate PLV
-        self.tech_usage = {skill: 0 for skill in self.tech_limits.keys()}
-
-        # Auxiliar dictionary to search operation by the tuple (task_id, op_id)
-        self.op_dict = {(op.task_id, op.op_id): op for op in operations}
-
-    def _check_predecessors_finished(self, op, current_time):
+    def decode(self, priority_vector):
         """
-        Verify if all predecessors of a given operation are already finished.
+        Generates the schedule by decoding the priority vector.
+        Priority vector should be a list of dicts or objects having a 'priority' value,
+        or just an ordered list of operations based on continuous priority values.
+        Actually, we can pass a dictionary mapping operation objects to their priority.
         """
-        for pred_id in op.predecessors_str:
-            pred_op = self.op_dict.get((op.task_id, pred_id))
-
-            if pred_op is None:
-                continue
-
-            if pred_op.end_time is None or pred_op.end_time > current_time:
-                return False
-        return True
-
-    def _get_active_operations(self, current_time):
-        """
-        Returns all operations being executed at current time.
-        """
-        return [op for op in self.operations if op._start_time is not None and op.start_time <= current_time < op.end_time]
-
-    def _check_resources_availability(self, op, current_time):
-        """
-        Verify whether there are available technicians and free space on the machine at current time.
-        """
-        active_ops = self._get_active_operations(current_time)
-
-        # Count ocuppied technicians
-        tech_in_use = {skill: 0 for skill in self.tech_limits.keys()}
-        for a_op in active_ops:
-            if a_op.skill in tech_in_use:
-                tech_in_use[a_op.skill] += a_op.num_workers
-
-        # Check available technicians for a new operation
-        if tech_in_use.get(op.skill, 0) + op.n_workers > self.tech_limits.get(op.skill, 0):
-            return False
-
-        # Count machine free spaces
-        machine_in_use = sum(a_op.n_workers for a_op in active_ops if a_op.machine == op.machine)
-        if machine_in_use + op.n_workers > self.machine_limits.get(op.machine, 999):
-            return False
-
-        return True
-
-    def build_schedule(self, priority_list):
-        """
-        Generate the schedule based on priorities
-        priority_list: 'Operation' object list ordered by GRASP or ITLBO
-        """
-
-        # Reset times if runned multiple times
+        # Reset operations
         for op in self.operations:
             op.start_time = None
             op.end_time = None
+            op.allocated_technicians = [] # Keep track for debugging/output
 
-        self.tech_usage = {skill: 0 for skill in self.tech_limits.keys()}
+        # Reset technicians
+        for tech in self.technicians:
+            tech.worked_hours = 0.0
+            tech.available_from = 0.0
 
-        # Pending operations ordered by priority
-        pending_ops = list(priority_list)
+        S_g = set() # Operations already scheduled
+        D_g = set(self._get_initial_schedulable_operations())
 
-        current_time = 0
+        schedule = []
 
-        while pending_ops:
-            # To find when machines/technicians leaves free spaces
-            # If current_time = 0 then try to start, otherwise it moves a step forward in time
-            ops_started_this_tick = False
+        while D_g:
+            best_op = self._select_best_operation(D_g, priority_vector)
 
-            for op in list(pending_ops):
-                # Check precedence
-                if not self._check_predecessors_finished(op, current_time):
-                    continue
+            start_time = self._find_earliest_start_time(best_op)
 
-                # Check space and resource availability
-                if self._check_resources_availability(op, current_time):
-                    # Start operation
-                    op.start_time = current_time
-                    op.end_time = current_time + op.duration
+            allocated_techs = self._allocate_technicians(best_op, start_time)
 
-                    # Register ocupation
-                    self.tech_usage[op.skill] += (op.num_workers * op.duration)
+            if len(allocated_techs) < best_op.n_workers:
+                start_time = self._find_earliest_start_time_with_resources(best_op, start_time)
+                allocated_techs = self._allocate_technicians(best_op, start_time)
 
-                    pending_ops.remove(op)
-                    ops_started_this_tick = True
+            finish_time = start_time + best_op.duration
 
-            # If no one were able to start an operation in the current time, we advance to the time when the next operation ends
-            if not ops_started_this_tick:
-                # Search in current operations to find the earliest end time
-                future_end_times = [op.end_time for op in self.operations if op.end_time is not None and op.end_time > current_time]
+            best_op.start_time = start_time
+            best_op.end_time = finish_time
+            best_op.allocated_technicians = [t.tech_id for t in allocated_techs]
 
-                if future_end_times:
-                    current_time = min(future_end_times)
-                else:
-                    print("DEADLOCK ALERT! Check whether a task requires more resources than machine spatial capacity.")
-                    break
+            schedule.append({
+                'operation': best_op,
+                'start': start_time,
+                'finish': finish_time,
+                'technicians': best_op.allocated_technicians
+            })
 
-        return self._calculate_objectives()
+            for tech in allocated_techs:
+                tech.available_from = finish_time
+                tech.worked_hours += best_op.duration
 
-    def _calculate_objectives(self):
-        """
-        Evaluates Makespan and PLV of the generated schedule.
-        """
-        # Makespan
-        makespan = max(op.end_time for op in self.operations if op.end_time is not None)
+            S_g.add((best_op.machine, best_op.task_id, best_op.op_id))
+            D_g.remove(best_op)
+            D_g.update(self._get_new_schedulable_operations(S_g))
 
-        # PLV
-        total_workers = sum(self.tech_limits.values())
-        if total_workers > 0:
-            avg_workload = sum(self.tech_usage.values()) / total_workers
+        makespan = max([op['finish'] for op in schedule]) if schedule else 0
+        plv = self._calculate_plv()
 
-            variance_sum = 0
-            for skill, total_time in self.tech_usage.items():
-                num_techs = self.tech_limits.get(skill, 1)
-                time_per_tech = total_time / num_techs if num_techs > 0 else 0
-                variance_sum += num_techs * ((time_per_tech - avg_workload) **2)
+        return makespan, plv, schedule
 
-            plv = variance_sum / total_workers
-        else:
-            plv = 0
+    def _get_initial_schedulable_operations(self):
+        return [op for op in self.operations if not op.predecessors_str]
 
-        return makespan, plv
+    def _get_new_schedulable_operations(self, S_g):
+        new_schedulable = []
+        for op in self.operations:
+            if (op.machine, op.task_id, op.op_id) not in S_g and op.start_time is None:
+                # Check if all predecessors are in S_g
+                if all((op.machine, op.task_id, pred_id) in S_g for pred_id in op.predecessors_str):
+                    new_schedulable.append(op)
+        return new_schedulable
+
+    def _select_best_operation(self, D_g, priority_vector):
+        # We assume priority_vector is a dict {op: priority_value}
+        # The smaller the value (or higher depending on definition), the better. Let's say higher is better priority.
+        # However, RK usually has lower values = higher priority if sorting ascending. We will assume ascending sort (lower is better).
+        best_op = min(D_g, key=lambda op: priority_vector.get(op, float('inf')))
+        return best_op
+
+    def _find_earliest_start_time(self, op):
+        # 1. Start after all predecessors are finished
+        max_pred_end = 0
+        for pred_id in op.predecessors_str:
+            pred_op = next((o for o in self.operations if o.machine == op.machine and o.task_id == op.task_id and o.op_id == pred_id), None)
+            if pred_op and pred_op.end_time is not None:
+                max_pred_end = max(max_pred_end, pred_op.end_time)
+
+        return max_pred_end
+
+    def _find_earliest_start_time_with_resources(self, op, current_time):
+        # Increment time until resources are met
+        while True:
+            # Check machine capacity
+            active_ops = [o for o in self.operations if o.start_time is not None and o.start_time <= current_time < o.end_time]
+            machine_in_use = sum(a_op.n_workers for a_op in active_ops if a_op.machine == op.machine)
+            if machine_in_use + op.n_workers <= self.machine_limits.get(op.machine, 999):
+                # Check technicians availability
+                eligible_techs = [t for t in self.technicians if op.skill in t.skills and t.available_from <= current_time]
+                if len(eligible_techs) >= op.n_workers:
+                    return current_time
+
+            # Find next event time (when an active operation ends or a technician becomes available)
+            future_times = [o.end_time for o in active_ops if o.end_time > current_time] + \
+                           [t.available_from for t in self.technicians if t.available_from > current_time and op.skill in t.skills]
+            if not future_times:
+                # Fallback to prevent infinite loop
+                return current_time + 1
+
+            # Move to the earliest next future event time
+            next_time = min(future_times)
+            if next_time == current_time:
+                current_time += 1
+            else:
+                current_time = next_time
+
+
+    def _allocate_technicians(self, operation, start_time):
+        eligible_techs = [
+            t for t in self.technicians
+            if operation.skill in t.skills and t.available_from <= start_time
+        ]
+
+        # 1st criteria: len(t.skills) -> Ascending (Specialist rule)
+        # 2nd criteria: t.worked_hours -> Ascending (Load balancing rule)
+        eligible_techs.sort(key=lambda t: (len(t.skills), t.worked_hours))
+
+        return eligible_techs[:operation.n_workers]
+
+    def _calculate_plv(self):
+        if not self.technicians:
+            return 0
+        mean_hours = sum(t.worked_hours for t in self.technicians) / len(self.technicians)
+        variance = sum((t.worked_hours - mean_hours)**2 for t in self.technicians) / len(self.technicians)
+        return variance
 
 # =====================================================================
 # MODULE 4: IMPLEMENTING GREEDY-RANDOMIZED ADAPTATIVE SEARCH PROCEDURE
@@ -241,31 +267,31 @@ class GRASPConstructor:
         self.operations = operations
         self.alpha = alpha
 
-    def generate_priority_list(self):
+    def generate_priority_vector(self):
         """
-        Generates a feasible and topologically ordered priority list.
+        Generates a continuous priority vector instead of an ordered list.
+        It uses the topological construction logic but assigns continuous values [0, 1]
+        where lower values denote higher priority, maintaining topological order.
         """
         priority_list = []
         scheduled_ops = set()
 
         def get_id(op):
-            return (op.task_id, op.op_id)
+            return (op.machine, op.task_id, op.op_id)
 
         total_ops = len(self.operations)
 
         while len(priority_list) < total_ops:
-            # To find eligible operations, i.e. when all predecessors are already in the priority list
             eligible_ops = []
 
             for op in self.operations:
-                # verify if predecessors IDs are already on the scheduled set
                 if get_id(op) not in scheduled_ops:
                     predecessors_met = all(
-                        (op.task_id, pred_id) in scheduled_ops
-                        for pred_id in op.predecessors
+                        (op.machine, op.task_id, pred_id) in scheduled_ops
+                        for pred_id in op.predecessors_str
                     )
-                if predecessors_met:
-                    eligible_ops.append(op)
+                    if predecessors_met:
+                        eligible_ops.append(op)
 
             if not eligible_ops:
                 print("ERROR: deadlock on predecessors net. Please review the data.")
@@ -274,7 +300,7 @@ class GRASPConstructor:
             max_duration = max(op.duration for op in eligible_ops)
             min_duration = min(op.duration for op in eligible_ops)
 
-            # RESTRICED CANDIDATE LIST (RCL) CONSTRUCTION
+            # RESTRICTED CANDIDATE LIST (RCL) CONSTRUCTION
             threshold = max_duration - self.alpha * (max_duration - min_duration)
             rcl = [op for op in eligible_ops if op.duration >= threshold]
 
@@ -283,7 +309,14 @@ class GRASPConstructor:
             priority_list.append(chosen_op)
             scheduled_ops.add(get_id(chosen_op))
 
-        return priority_list
+        # Convert the ordered list into a continuous priority vector
+        # by assigning equally spaced values from 0 to 1 based on their order.
+        priority_vector = {}
+        n = len(priority_list)
+        for idx, op in enumerate(priority_list):
+            priority_vector[op] = idx / max(1, n - 1)
+
+        return priority_vector
 
 # ===============================================
 # MODULE 4: IMPLEMENTING LOCAL SEARCH WITH GRASP
@@ -297,97 +330,260 @@ class GRASPLocalSearch:
         """
         Verify whether is secure to change the operations order considering precedence order.
         """
-        if op1.task_id == op2.task_id and op1.op_id in op2.predecessors:
+        if op1.machine == op2.machine and op1.task_id == op2.task_id and op1.op_id in op2.predecessors_str:
             return False
         return True
 
-    def optimize(self, initial_priority_list, current_makespan, current_plv):
+    def optimize(self, priority_vector, current_makespan, current_plv):
         """
-        Apply local search while iteractively refining the schedule
+        Apply local search while iteractively refining the schedule.
+        Works with priority vectors instead of ordered lists.
         """
         improved = True
-        best_list = list(initial_priority_list)
+
+        # Sort operations by priority
+        best_ordered_ops = sorted(priority_vector.keys(), key=lambda op: priority_vector[op])
+
         best_cmax = current_makespan
         best_plv = current_plv
 
         while improved:
             improved = False
 
-            for i in range(len(best_list) - 1):
-                op_atual = best_list[i]
-                op_proxima = best_list[i+1]
+            for i in range(len(best_ordered_ops) - 1):
+                op_atual = best_ordered_ops[i]
+                op_proxima = best_ordered_ops[i+1]
 
                 if self._is_valid_swap(op_atual, op_proxima):
-                    # Create neighbour scenario (to change order of the operations pair)
-                    neighbour_list = list(best_list)
-                    neighbour_list[i], neighbour_list[i+1] = neighbour_list[i+1], neighbour_list[i]
+                    # Swap priorities slightly to swap their order
+                    neighbour_ordered_ops = list(best_ordered_ops)
+                    neighbour_ordered_ops[i], neighbour_ordered_ops[i+1] = neighbour_ordered_ops[i+1], neighbour_ordered_ops[i]
+
+                    # Create a new priority vector
+                    neighbour_vector = {}
+                    n = len(neighbour_ordered_ops)
+                    for idx, op in enumerate(neighbour_ordered_ops):
+                        neighbour_vector[op] = idx / max(1, n - 1)
 
                     # Evaluate new scenario with SSGS
-                    makespan, plv = self.ssgs.build_schedule(neighbour_list)
+                    makespan, plv, _ = self.ssgs.decode(neighbour_vector)
 
                     # Acceptance criteria: (is Cmax smaller?) OR (is PLV samller?)
                     if makespan < best_cmax or (makespan == best_cmax and plv < best_plv):
                         best_cmax = makespan
                         best_plv = plv
-                        best_list = neighbour_list
+                        best_ordered_ops = neighbour_ordered_ops
                         improved = True
                         break
 
-        return best_list, best_cmax, best_plv
+        # Re-generate the final priority vector based on the best ordered ops
+        best_vector = {}
+        n = len(best_ordered_ops)
+        for idx, op in enumerate(best_ordered_ops):
+            best_vector[op] = idx / max(1, n - 1)
 
-# ============================
-# MODULE 6: EXECUTION PIPELIN
-# ============================
+        return best_vector, best_cmax, best_plv
+
+# ====================================================
+# MODULE 6: HYBRID ITLBO-GRASP OPTIMIZER AND PIPELINE
+# ====================================================
+
+class Hybrid_ITLBO_GRASP:
+    def __init__(self, operations, pop_size=30, max_generations=50, alpha=0.3):
+        self.operations = operations
+        self.pop_size = pop_size
+        self.max_generations = max_generations
+
+        self.techs = create_technicians_list(TECHNICIANS_AVAILABLE)
+        self.ssgs = SSGS(operations, self.techs, MACHINE_SPATIAL_CAPACITY)
+        self.grasp_constructor = GRASPConstructor(operations, alpha=alpha)
+        self.grasp_local_search = GRASPLocalSearch(self.ssgs)
+
+        self.population = []
+        self.fitness = []
+        self.makespans = []
+        self.plvs = []
+
+        # Weights for the penalty linear equation (Fitness)
+        self.w1 = 1.0 # makespan weight
+        self.w2 = 1.0 # plv weight
+
+    def _eval(self, vector):
+        mk, plv, schedule = self.ssgs.decode(vector)
+        return mk * self.w1 + plv * self.w2, mk, plv, schedule
+
+    def initialize_population(self):
+        print(f"Initializing Population (Size: {self.pop_size}) with GRASP Constructor...")
+        for _ in range(self.pop_size):
+            vector = self.grasp_constructor.generate_priority_vector()
+            fit, mk, plv, _ = self._eval(vector)
+
+            self.population.append(vector)
+            self.fitness.append(fit)
+            self.makespans.append(mk)
+            self.plvs.append(plv)
+
+    def optimize(self):
+        self.initialize_population()
+
+        best_fit = min(self.fitness)
+        best_idx = self.fitness.index(best_fit)
+
+        global_best_vector = self.population[best_idx].copy()
+        global_best_mk = self.makespans[best_idx]
+        global_best_plv = self.plvs[best_idx]
+
+        for gen in range(self.max_generations):
+            # Sort population to rank
+            ranked_indices = np.argsort(self.fitness)
+            teacher_idx = ranked_indices[0]
+            teacher = self.population[teacher_idx]
+
+            # Calculate Mean Vector
+            mean_vector = {}
+            for op in self.operations:
+                mean_vector[op] = np.mean([ind[op] for ind in self.population])
+
+            # Calculate Fitness-Distance Ratio to find Assistant Teacher
+            # F_n = rank (1 is best). D_n = spatial distance from teacher rank (1 is closest)
+            distances = []
+            for i in range(self.pop_size):
+                if i == teacher_idx:
+                    distances.append(0.0)
+                else:
+                    dist = np.sqrt(sum((self.population[i][op] - teacher[op])**2 for op in self.operations))
+                    distances.append(dist)
+
+            dist_ranked_indices = np.argsort(distances)
+
+            fd_ratios = []
+            for i in range(self.pop_size):
+                if i == teacher_idx:
+                    fd_ratios.append(float('inf')) # Teacher cannot be assistant
+                    continue
+                f_n = np.where(ranked_indices == i)[0][0] + 1
+                d_n = np.where(dist_ranked_indices == i)[0][0] + 1
+                fd_ratios.append(f_n / d_n)
+
+            assistant_idx = np.argmin(fd_ratios)
+            assistant = self.population[assistant_idx]
+
+            for i in range(self.pop_size):
+                learner = self.population[i]
+
+                # FASE 1: TEACHING
+                r = random.random()
+                T_F = random.randint(1, 2)
+                new_learner_1 = {}
+                for op in self.operations:
+                    new_learner_1[op] = learner[op] + r * (teacher[op] - T_F * mean_vector[op])
+                    new_learner_1[op] = max(0.0, min(1.0, new_learner_1[op])) # bound
+
+                fit1, mk1, plv1, _ = self._eval(new_learner_1)
+                if fit1 < self.fitness[i]:
+                    self.population[i] = new_learner_1
+                    self.fitness[i] = fit1
+                    self.makespans[i] = mk1
+                    self.plvs[i] = plv1
+                    learner = new_learner_1
+
+                # FASE 2: ASSISTANT TEACHING
+                r1 = random.random()
+                r2 = random.random()
+                new_learner_2 = {}
+                for op in self.operations:
+                    new_learner_2[op] = learner[op] + r1 * (teacher[op] - learner[op]) + r2 * (assistant[op] - learner[op])
+                    new_learner_2[op] = max(0.0, min(1.0, new_learner_2[op]))
+
+                fit2, mk2, plv2, _ = self._eval(new_learner_2)
+                if fit2 < self.fitness[i]:
+                    self.population[i] = new_learner_2
+                    self.fitness[i] = fit2
+                    self.makespans[i] = mk2
+                    self.plvs[i] = plv2
+                    learner = new_learner_2
+
+                # FASE 3: LEARNING
+                partner_idx = random.choice([x for x in range(self.pop_size) if x != i])
+                partner = self.population[partner_idx]
+                new_learner_3 = {}
+                r3 = random.random()
+
+                for op in self.operations:
+                    if self.fitness[i] < self.fitness[partner_idx]:
+                        new_learner_3[op] = learner[op] + r3 * (learner[op] - partner[op])
+                    else:
+                        new_learner_3[op] = learner[op] + r3 * (partner[op] - learner[op])
+                    new_learner_3[op] = max(0.0, min(1.0, new_learner_3[op]))
+
+                fit3, mk3, plv3, _ = self._eval(new_learner_3)
+                if fit3 < self.fitness[i]:
+                    self.population[i] = new_learner_3
+                    self.fitness[i] = fit3
+                    self.makespans[i] = mk3
+                    self.plvs[i] = plv3
+
+            # FASE 4: INTENSIFICAÇÃO COM BUSCA LOCAL GRASP (Top 5%)
+            top_n = max(1, int(0.05 * self.pop_size))
+            elite_indices = np.argsort(self.fitness)[:top_n]
+
+            for idx in elite_indices:
+                refined_vector, ref_mk, ref_plv = self.grasp_local_search.optimize(
+                    self.population[idx], self.makespans[idx], self.plvs[idx]
+                )
+                ref_fit = ref_mk * self.w1 + ref_plv * self.w2
+
+                if ref_fit < self.fitness[idx]:
+                    self.population[idx] = refined_vector
+                    self.fitness[idx] = ref_fit
+                    self.makespans[idx] = ref_mk
+                    self.plvs[idx] = ref_plv
+
+            # Update Global Best
+            gen_best_idx = np.argmin(self.fitness)
+            if self.fitness[gen_best_idx] < best_fit:
+                best_fit = self.fitness[gen_best_idx]
+                global_best_vector = self.population[gen_best_idx].copy()
+                global_best_mk = self.makespans[gen_best_idx]
+                global_best_plv = self.plvs[gen_best_idx]
+                print(f"Gen {gen+1:02d} | NEW OPTIMAL >>> Makespan: {global_best_mk:.0f} | PLV: {global_best_plv:.2f}")
+
+        # Final decode for the best schedule
+        _, _, best_schedule = self.ssgs.decode(global_best_vector)
+        return global_best_mk, global_best_plv, best_schedule
 
 if __name__ == '__main__':
     print(">>> INITIALIZING MAINTENANCE SCHEDULE OPTIMIZER WITH HI-ITLBO-GRASP-SSGS <<<")
 
     try:
-        operations = load_all_operations('datasets/Case 1.xlsx', ['RRU', 'HQL', 'ITP', 'ISS', 'TLU'])
+        # NOTE: Make sure the file actually exists and paths are correct.
+        operations = load_all_operations('data/Case 1.xlsx', ['RRU', 'HQL', 'ITP', 'ISS', 'TLU'])
 
         print(f"[{len(operations)}] operations loaded successfull!")
 
     except Exception as e:
         print(f"Error: {e}")
+        # exit() is generally fine, but we'll print and continue if operations were not found.
+        # This will fail fast anyway below if operations is not defined.
         exit()
 
-    # Configuring algorithm engines
-    ssgs_engine = SSGS(operations, TECHNICIANS_AVAILABLE, MACHINE_SPATIAL_CAPACITY)
-    grasp_constructor = GRASPConstructor(operations, alpha = 0.3)
-    grasp_local_search = GRASPLocalSearch(ssgs_engine)
-
-    # Storing variables for global optimal of all iterations
-    global_best_makespan = float('inf')
-    global_best_plv = float('inf')
-    global_best_schedule = []
-
-    # GRASP hyperparameter: how many initial solutions will we explore?
-    GRASP_ITERATIONS = 50
-
-    print("\nInitializing GRASP metaheuristic...")
-    for iteration in range(GRASP_ITERATIONS):
-        # STEP 1: CONSTRUCTION
-        initial_list = grasp_constructor.generate_priority_list()
-        initial_makespan, initial_plv = ssgs_engine.build_schedule(initial_list)
-
-        # STEP 2: LOCAL SEARCH
-        best_list, best_makespan, best_plv = grasp_local_search.optimize(initial_list, initial_makespan, initial_plv)
-
-        # STEP 3: EVALUATION
-        if best_makespan < global_best_makespan or (best_makespan == global_best_makespan and best_plv < global_best_plv):
-            global_best_makespan = best_makespan
-            global_best_plv = best_plv
-            global_best_schedule = best_list
-            print(f"Iteration {iteration+1:02d} | NEW GLOBAL OPTIMAL >>> Makespan: {global_best_makespan:.0f} | PLV: {global_best_plv:.2f}")
+    print("\nRunning Hybrid ITLBO-GRASP Optimizer...")
+    # Parameters can be adjusted as needed
+    # Using smaller population and generations for quick testing, but functionally robust.
+    optimizer = Hybrid_ITLBO_GRASP(operations, pop_size=10, max_generations=5, alpha=0.3)
+    best_makespan, best_plv, best_schedule = optimizer.optimize()
 
     print("\n=======================================================")
     print("                RESULTADO DA OTIMIZAÇÃO                ")
     print("=======================================================")
-    print(f"Total downtime (Makespan): {global_best_makespan:.0f} minutes ({global_best_makespan/60:.2f} horas)")
-    print(f"Personel Loading Variance (PLV): {global_best_plv:.2f}")
+    print(f"Total downtime (Makespan): {best_makespan:.0f} minutes ({best_makespan/60:.2f} horas)")
+    print(f"Personel Loading Variance (PLV): {best_plv:.2f}")
     print("=======================================================\n")
 
-    # print chronological order of tasks
     print("Ordem Lógica das Tarefas no Cronograma Ótimo:")
-    for op in global_best_schedule:
-        print(f"-> Máquina: {op.machine} | Task: {op.task_id} | Op: {op.op_id} | Especialidade: {op.skill} ({op.num_workers} pax)")
+    # sort the schedule chronologically by start time
+    best_schedule.sort(key=lambda x: x['start'])
+    for entry in best_schedule:
+        op = entry['operation']
+        techs = ", ".join(entry['technicians'])
+        print(f"-> Máquina: {op.machine} | Task: {op.task_id} | Op: {op.op_id} | Start: {entry['start']} | Finish: {entry['finish']} | Techs: [{techs}]")
