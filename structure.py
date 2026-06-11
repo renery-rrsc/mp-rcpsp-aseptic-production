@@ -118,6 +118,8 @@ class SSGS:
         self.operations = operations
         self.technicians = technicians_list
         self.machine_limits = machine_capacity_dict.copy()
+        # Pre-compute an O(1) lookup dictionary for operations
+        self.op_lookup = {(op.machine, op.task_id, op.op_id): op for op in self.operations}
 
     def decode(self, priority_vector):
         """
@@ -202,7 +204,7 @@ class SSGS:
         # 1. Start after all predecessors are finished
         max_pred_end = 0
         for pred_id in op.predecessors_str:
-            pred_op = next((o for o in self.operations if o.machine == op.machine and o.task_id == op.task_id and o.op_id == pred_id), None)
+            pred_op = self.op_lookup.get((op.machine, op.task_id, pred_id))
             if pred_op and pred_op.end_time is not None:
                 max_pred_end = max(max_pred_end, pred_op.end_time)
 
