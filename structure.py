@@ -3,6 +3,8 @@ import numpy as np
 import math
 import random
 import time
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 # ====================================
 # MODULE 1: DEFINING MODEL PARAMETERS
@@ -92,19 +94,28 @@ def load_all_operations(file_path, sheets=None):
         if sheet not in all_sheets_df:
             continue
         df = all_sheets_df[sheet]
-        for _, row in df.iterrows():
-            if pd.isna(row['Task ID']) or pd.isna(row['Operation ID']):
+
+        col_idx = {col: i for i, col in enumerate(df.columns)}
+        task_id_idx = col_idx.get('Task ID')
+        op_id_idx = col_idx.get('Operation ID')
+        duration_idx = col_idx.get('Task Duration')
+        skill_idx = col_idx.get('Skills Required')
+        workers_idx = col_idx.get('Num. Of Workers')
+        pred_idx = col_idx.get('Preceding Op')
+
+        for row in df.itertuples(index=False, name=None):
+            if pd.isna(row[task_id_idx]) or pd.isna(row[op_id_idx]):
                 continue
 
             machine = sheet
             op = Operation(
                 machine=machine,
-                task_id=row['Task ID'],
-                op_id=row['Operation ID'],
-                duration_hrs=row['Task Duration'],
-                skill=row['Skills Required'],
-                n_workers=row['Num. Of Workers'],
-                predecessors_str=row.get('Preceding Op', '') # Usa get para evitar erro se a coluna estiver vazia
+                task_id=row[task_id_idx],
+                op_id=row[op_id_idx],
+                duration_hrs=row[duration_idx],
+                skill=row[skill_idx],
+                n_workers=row[workers_idx],
+                predecessors_str=row[pred_idx] if pred_idx is not None else '' # Usa if para evitar erro se a coluna estiver vazia
             )
             operations.append(op)
 
@@ -119,6 +130,8 @@ class SSGS:
         self.operations = operations
         self.technicians = technicians_list
         self.machine_limits = machine_capacity_dict.copy()
+        # Pre-compute an O(1) lookup dictionary for operations
+        self.op_lookup = {(op.machine, op.task_id, op.op_id): op for op in self.operations}
 
     def decode(self, priority_vector):
         """
@@ -203,7 +216,7 @@ class SSGS:
         # 1. Start after all predecessors are finished
         max_pred_end = 0
         for pred_id in op.predecessors_str:
-            pred_op = next((o for o in self.operations if o.machine == op.machine and o.task_id == op.task_id and o.op_id == pred_id), None)
+            pred_op = self.op_lookup.get((op.machine, op.task_id, pred_id))
             if pred_op and pred_op.end_time is not None:
                 max_pred_end = max(max_pred_end, pred_op.end_time)
 
@@ -386,7 +399,60 @@ class GRASPLocalSearch:
         return best_vector, best_cmax, best_plv
 
 # ====================================================
-# MODULE 6: HYBRID ITLBO-GRASP OPTIMIZER AND PIPELINE
+# MODULE 6: VISUALIZATION
+# ====================================================
+
+def generate_gantt_chart(schedule, filename='gantt_chart.png'):
+    """
+    Generates a Gantt chart from the scheduled operations.
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Get distinct machines and assign them y-positions
+    machines = list(set([entry['operation'].machine for entry in schedule]))
+    machines.sort(reverse=True) # So the first machine is at the top
+    machine_y_map = {m: i for i, m in enumerate(machines)}
+
+    # Define colors
+    colors = list(mcolors.TABLEAU_COLORS.values())
+    task_colors = {}
+
+    for entry in schedule:
+        op = entry['operation']
+        start = entry['start']
+        finish = entry['finish']
+        duration = finish - start
+        machine = op.machine
+        task_id = op.task_id
+
+        y_pos = machine_y_map[machine]
+
+        if task_id not in task_colors:
+            task_colors[task_id] = colors[len(task_colors) % len(colors)]
+
+        color = task_colors[task_id]
+
+        ax.barh(y_pos, duration, left=start, height=0.5, color=color, edgecolor='black', alpha=0.8)
+
+        # Add a text label inside the bar
+        label = f"T{task_id}-O{op.op_id}"
+        ax.text(start + duration/2, y_pos, label, ha='center', va='center', color='white', fontsize=8, fontweight='bold')
+
+    # Formatting the chart
+    ax.set_yticks(range(len(machines)))
+    ax.set_yticklabels(machines)
+    ax.set_xlabel('Time (minutes)')
+    ax.set_ylabel('Machines')
+    ax.set_title('Optimal Schedule Gantt Chart')
+    ax.grid(axis='x', linestyle='--', alpha=0.7)
+
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+    print(f"Gantt chart successfully saved to {filename}")
+
+# ====================================================
+# MODULE 7: HYBRID ITLBO-GRASP OPTIMIZER AND PIPELINE
 # ====================================================
 
 class Hybrid_ITLBO_GRASP:
@@ -412,6 +478,16 @@ class Hybrid_ITLBO_GRASP:
     def _eval(self, vector):
         mk, plv, schedule = self.ssgs.decode(vector)
         return mk * self.w1 + plv * self.w2, mk, plv, schedule
+
+    def _eval_and_update(self, i, new_learner, current_learner):
+        fit, mk, plv, _ = self._eval(new_learner)
+        if fit < self.fitness[i]:
+            self.population[i] = new_learner
+            self.fitness[i] = fit
+            self.makespans[i] = mk
+            self.plvs[i] = plv
+            return new_learner
+        return current_learner
 
     def initialize_population(self):
         print(f"Initializing Population (Size: {self.pop_size}) with GRASP Constructor...")
@@ -496,13 +572,7 @@ class Hybrid_ITLBO_GRASP:
                     new_learner_1[op] = learner[op] + r * (teacher[op] - T_F * mean_vector[op])
                     new_learner_1[op] = max(0.0, min(1.0, new_learner_1[op])) # bound
 
-                fit1, mk1, plv1, _ = self._eval(new_learner_1)
-                if fit1 < self.fitness[i]:
-                    self.population[i] = new_learner_1
-                    self.fitness[i] = fit1
-                    self.makespans[i] = mk1
-                    self.plvs[i] = plv1
-                    learner = new_learner_1
+                learner = self._eval_and_update(i, new_learner_1, learner)
 
                 # FASE 2: ASSISTANT TEACHING
                 r1 = random.random()
@@ -512,13 +582,7 @@ class Hybrid_ITLBO_GRASP:
                     new_learner_2[op] = learner[op] + r1 * (teacher[op] - learner[op]) + r2 * (assistant[op] - learner[op])
                     new_learner_2[op] = max(0.0, min(1.0, new_learner_2[op]))
 
-                fit2, mk2, plv2, _ = self._eval(new_learner_2)
-                if fit2 < self.fitness[i]:
-                    self.population[i] = new_learner_2
-                    self.fitness[i] = fit2
-                    self.makespans[i] = mk2
-                    self.plvs[i] = plv2
-                    learner = new_learner_2
+                learner = self._eval_and_update(i, new_learner_2, learner)
 
                 # FASE 3: LEARNING
                 partner_idx = random.choice([x for x in range(self.pop_size) if x != i])
@@ -533,12 +597,7 @@ class Hybrid_ITLBO_GRASP:
                         new_learner_3[op] = learner[op] + r3 * (partner[op] - learner[op])
                     new_learner_3[op] = max(0.0, min(1.0, new_learner_3[op]))
 
-                fit3, mk3, plv3, _ = self._eval(new_learner_3)
-                if fit3 < self.fitness[i]:
-                    self.population[i] = new_learner_3
-                    self.fitness[i] = fit3
-                    self.makespans[i] = mk3
-                    self.plvs[i] = plv3
+                learner = self._eval_and_update(i, new_learner_3, learner)
 
             # FASE 4: INTENSIFICAÇÃO COM BUSCA LOCAL GRASP (Top 5%)
             top_n = max(1, int(0.05 * self.pop_size))
@@ -625,3 +684,6 @@ if __name__ == '__main__':
         op = entry['operation']
         techs = ", ".join(entry['technicians'])
         print(f"-> Máquina: {op.machine} | Task: {op.task_id} | Op: {op.op_id} | Start: {entry['start']} | Finish: {entry['finish']} | Techs: [{techs}]")
+
+    print("\nGenerating Gantt Chart...")
+    generate_gantt_chart(best_schedule)
