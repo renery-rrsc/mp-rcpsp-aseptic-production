@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import math
 import random
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 # ====================================
 # MODULE 1: DEFINING MODEL PARAMETERS
@@ -396,7 +398,60 @@ class GRASPLocalSearch:
         return best_vector, best_cmax, best_plv
 
 # ====================================================
-# MODULE 6: HYBRID ITLBO-GRASP OPTIMIZER AND PIPELINE
+# MODULE 6: VISUALIZATION
+# ====================================================
+
+def generate_gantt_chart(schedule, filename='gantt_chart.png'):
+    """
+    Generates a Gantt chart from the scheduled operations.
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Get distinct machines and assign them y-positions
+    machines = list(set([entry['operation'].machine for entry in schedule]))
+    machines.sort(reverse=True) # So the first machine is at the top
+    machine_y_map = {m: i for i, m in enumerate(machines)}
+
+    # Define colors
+    colors = list(mcolors.TABLEAU_COLORS.values())
+    task_colors = {}
+
+    for entry in schedule:
+        op = entry['operation']
+        start = entry['start']
+        finish = entry['finish']
+        duration = finish - start
+        machine = op.machine
+        task_id = op.task_id
+
+        y_pos = machine_y_map[machine]
+
+        if task_id not in task_colors:
+            task_colors[task_id] = colors[len(task_colors) % len(colors)]
+
+        color = task_colors[task_id]
+
+        ax.barh(y_pos, duration, left=start, height=0.5, color=color, edgecolor='black', alpha=0.8)
+
+        # Add a text label inside the bar
+        label = f"T{task_id}-O{op.op_id}"
+        ax.text(start + duration/2, y_pos, label, ha='center', va='center', color='white', fontsize=8, fontweight='bold')
+
+    # Formatting the chart
+    ax.set_yticks(range(len(machines)))
+    ax.set_yticklabels(machines)
+    ax.set_xlabel('Time (minutes)')
+    ax.set_ylabel('Machines')
+    ax.set_title('Optimal Schedule Gantt Chart')
+    ax.grid(axis='x', linestyle='--', alpha=0.7)
+
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+    print(f"Gantt chart successfully saved to {filename}")
+
+# ====================================================
+# MODULE 7: HYBRID ITLBO-GRASP OPTIMIZER AND PIPELINE
 # ====================================================
 
 class Hybrid_ITLBO_GRASP:
@@ -598,3 +653,6 @@ if __name__ == '__main__':
         op = entry['operation']
         techs = ", ".join(entry['technicians'])
         print(f"-> Máquina: {op.machine} | Task: {op.task_id} | Op: {op.op_id} | Start: {entry['start']} | Finish: {entry['finish']} | Techs: [{techs}]")
+
+    print("\nGenerating Gantt Chart...")
+    generate_gantt_chart(best_schedule)
