@@ -133,6 +133,17 @@ class SSGS:
         # Pre-compute an O(1) lookup dictionary for operations
         self.op_lookup = {(op.machine, op.task_id, op.op_id): op for op in self.operations}
 
+        # Pre-compute successors and predecessor counts for O(1) schedulable updates
+        self.successors = { (op.machine, op.task_id, op.op_id): [] for op in self.operations }
+        self.base_unscheduled_preds = { (op.machine, op.task_id, op.op_id): len(op.predecessors_str) for op in self.operations }
+        self.initial_schedulable_ops = [op for op in self.operations if not op.predecessors_str]
+
+        for op in self.operations:
+            for pred_id in op.predecessors_str:
+                pred_key = (op.machine, op.task_id, pred_id)
+                if pred_key in self.successors:
+                    self.successors[pred_key].append(op)
+
     def decode(self, priority_vector):
         """
         Generates the schedule by decoding the priority vector.
@@ -151,8 +162,8 @@ class SSGS:
             tech.worked_hours = 0.0
             tech.available_from = 0.0
 
-        S_g = set() # Operations already scheduled
-        D_g = set(self._get_initial_schedulable_operations())
+        D_g = set(self.initial_schedulable_ops)
+        unscheduled_preds = self.base_unscheduled_preds.copy()
 
         schedule = []
 
@@ -184,26 +195,19 @@ class SSGS:
                 tech.available_from = finish_time
                 tech.worked_hours += best_op.duration
 
-            S_g.add((best_op.machine, best_op.task_id, best_op.op_id))
+            op_key = (best_op.machine, best_op.task_id, best_op.op_id)
             D_g.remove(best_op)
-            D_g.update(self._get_new_schedulable_operations(S_g))
+
+            for succ_op in self.successors.get(op_key, []):
+                succ_key = (succ_op.machine, succ_op.task_id, succ_op.op_id)
+                unscheduled_preds[succ_key] -= 1
+                if unscheduled_preds[succ_key] == 0:
+                    D_g.add(succ_op)
 
         makespan = max([op['finish'] for op in schedule]) if schedule else 0
         plv = self._calculate_plv()
 
         return makespan, plv, schedule
-
-    def _get_initial_schedulable_operations(self):
-        return [op for op in self.operations if not op.predecessors_str]
-
-    def _get_new_schedulable_operations(self, S_g):
-        new_schedulable = []
-        for op in self.operations:
-            if (op.machine, op.task_id, op.op_id) not in S_g and op.start_time is None:
-                # Check if all predecessors are in S_g
-                if all((op.machine, op.task_id, pred_id) in S_g for pred_id in op.predecessors_str):
-                    new_schedulable.append(op)
-        return new_schedulable
 
     def _select_best_operation(self, D_g, priority_vector):
         # We assume priority_vector is a dict {op: priority_value}
