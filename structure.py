@@ -91,19 +91,28 @@ def load_all_operations(file_path, sheets=None):
         if sheet not in all_sheets_df:
             continue
         df = all_sheets_df[sheet]
-        for _, row in df.iterrows():
-            if pd.isna(row['Task ID']) or pd.isna(row['Operation ID']):
+
+        col_idx = {col: i for i, col in enumerate(df.columns)}
+        task_id_idx = col_idx.get('Task ID')
+        op_id_idx = col_idx.get('Operation ID')
+        duration_idx = col_idx.get('Task Duration')
+        skill_idx = col_idx.get('Skills Required')
+        workers_idx = col_idx.get('Num. Of Workers')
+        pred_idx = col_idx.get('Preceding Op')
+
+        for row in df.itertuples(index=False, name=None):
+            if pd.isna(row[task_id_idx]) or pd.isna(row[op_id_idx]):
                 continue
 
             machine = sheet
             op = Operation(
                 machine=machine,
-                task_id=row['Task ID'],
-                op_id=row['Operation ID'],
-                duration_hrs=row['Task Duration'],
-                skill=row['Skills Required'],
-                n_workers=row['Num. Of Workers'],
-                predecessors_str=row.get('Preceding Op', '') # Usa get para evitar erro se a coluna estiver vazia
+                task_id=row[task_id_idx],
+                op_id=row[op_id_idx],
+                duration_hrs=row[duration_idx],
+                skill=row[skill_idx],
+                n_workers=row[workers_idx],
+                predecessors_str=row[pred_idx] if pred_idx is not None else '' # Usa if para evitar erro se a coluna estiver vazia
             )
             operations.append(op)
 
