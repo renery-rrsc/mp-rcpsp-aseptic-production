@@ -166,6 +166,7 @@ class SSGS:
         unscheduled_preds = self.base_unscheduled_preds.copy()
 
         schedule = []
+        self.scheduled_operations = []
 
         while D_g:
             best_op = self._select_best_operation(D_g, priority_vector)
@@ -190,6 +191,7 @@ class SSGS:
                 'finish': finish_time,
                 'technicians': best_op.allocated_technicians
             })
+            self.scheduled_operations.append(best_op)
 
             for tech in allocated_techs:
                 tech.available_from = finish_time
@@ -227,25 +229,26 @@ class SSGS:
         return max_pred_end
 
     def _find_earliest_start_time_with_resources(self, op, current_time):
-        # Increment time until resources are met
+        machine_ops = [o for o in self.scheduled_operations if o.machine == op.machine]
+        skilled_techs = [t for t in self.technicians if op.skill in t.skills]
+        machine_limit = self.machine_limits.get(op.machine, 999)
+
         while True:
             # Check machine capacity
-            active_ops = [o for o in self.operations if o.start_time is not None and o.start_time <= current_time < o.end_time]
-            machine_in_use = sum(a_op.n_workers for a_op in active_ops if a_op.machine == op.machine)
-            if machine_in_use + op.n_workers <= self.machine_limits.get(op.machine, 999):
+            machine_in_use = sum(o.n_workers for o in machine_ops if o.start_time <= current_time < o.end_time)
+
+            if machine_in_use + op.n_workers <= machine_limit:
                 # Check technicians availability
-                eligible_techs = [t for t in self.technicians if op.skill in t.skills and t.available_from <= current_time]
+                eligible_techs = [t for t in skilled_techs if t.available_from <= current_time]
                 if len(eligible_techs) >= op.n_workers:
                     return current_time
 
-            # Find next event time (when an active operation ends or a technician becomes available)
-            future_times = [o.end_time for o in active_ops if o.end_time > current_time] + \
-                           [t.available_from for t in self.technicians if t.available_from > current_time and op.skill in t.skills]
+            future_times = [o.end_time for o in machine_ops if o.end_time > current_time] + \
+                           [t.available_from for t in skilled_techs if t.available_from > current_time]
+
             if not future_times:
-                # Fallback to prevent infinite loop
                 return current_time + 1
 
-            # Move to the earliest next future event time
             next_time = min(future_times)
             if next_time == current_time:
                 current_time += 1
