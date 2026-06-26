@@ -556,13 +556,17 @@ class Hybrid_ITLBO_GRASP:
 
             dist_ranked_indices = np.argsort(distances)
 
+            # Pre-calculate inverse permutations for O(1) lookup
+            f_n_lookup = np.argsort(ranked_indices) + 1
+            d_n_lookup = np.argsort(dist_ranked_indices) + 1
+
             fd_ratios = []
             for i in range(self.pop_size):
                 if i == teacher_idx:
                     fd_ratios.append(float('inf')) # Teacher cannot be assistant
                     continue
-                f_n = np.where(ranked_indices == i)[0][0] + 1
-                d_n = np.where(dist_ranked_indices == i)[0][0] + 1
+                f_n = f_n_lookup[i]
+                d_n = d_n_lookup[i]
                 fd_ratios.append(f_n / d_n)
 
             assistant_idx = np.argmin(fd_ratios)
