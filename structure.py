@@ -133,6 +133,14 @@ class SSGS:
         # Pre-compute an O(1) lookup dictionary for operations
         self.op_lookup = {(op.machine, op.task_id, op.op_id): op for op in self.operations}
 
+        # Pre-compute a dictionary mapping each skill to a list of capable technicians
+        self.skill_to_techs = {}
+        for tech in self.technicians:
+            for skill in tech.skills:
+                if skill not in self.skill_to_techs:
+                    self.skill_to_techs[skill] = []
+                self.skill_to_techs[skill].append(tech)
+
         # Pre-compute successors and predecessor counts for O(1) schedulable updates
         self.successors = { (op.machine, op.task_id, op.op_id): [] for op in self.operations }
         self.base_unscheduled_preds = { (op.machine, op.task_id, op.op_id): len(op.predecessors_str) for op in self.operations }
@@ -230,7 +238,7 @@ class SSGS:
 
     def _find_earliest_start_time_with_resources(self, op, current_time):
         machine_ops = [o for o in self.scheduled_operations if o.machine == op.machine]
-        skilled_techs = [t for t in self.technicians if op.skill in t.skills]
+        skilled_techs = self.skill_to_techs.get(op.skill, [])
         machine_limit = self.machine_limits.get(op.machine, 999)
 
         while True:
