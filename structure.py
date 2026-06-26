@@ -539,20 +539,18 @@ class Hybrid_ITLBO_GRASP:
             teacher_idx = ranked_indices[0]
             teacher = self.population[teacher_idx]
 
+            # Convert population to a matrix for vectorized operations
+            pop_matrix = np.array([[ind[op] for op in self.operations] for ind in self.population])
+
             # Calculate Mean Vector
-            mean_vector = {}
-            for op in self.operations:
-                mean_vector[op] = np.mean([ind[op] for ind in self.population])
+            mean_values = np.mean(pop_matrix, axis=0)
+            mean_vector = {op: mean_values[j] for j, op in enumerate(self.operations)}
 
             # Calculate Fitness-Distance Ratio to find Assistant Teacher
             # F_n = rank (1 is best). D_n = spatial distance from teacher rank (1 is closest)
-            distances = []
-            for i in range(self.pop_size):
-                if i == teacher_idx:
-                    distances.append(0.0)
-                else:
-                    dist = np.sqrt(sum((self.population[i][op] - teacher[op])**2 for op in self.operations))
-                    distances.append(dist)
+            teacher_arr = pop_matrix[teacher_idx]
+            distances = np.linalg.norm(pop_matrix - teacher_arr, axis=1).tolist()
+            distances[teacher_idx] = 0.0
 
             dist_ranked_indices = np.argsort(distances)
 
